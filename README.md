@@ -15,11 +15,14 @@ This project is a Minimum Viable Product (MVP) for a Content Intelligence Platfo
 The application is composed of two main parts: a **FastAPI web server** for handling user interactions and a **Google Cloud Function** for background processing.
 
 ### FastAPI Web Server (`src/`)
-*   `main.py`: The main entry point for the FastAPI application. It serves the frontend and provides two key endpoints:
-    -   `/upload`: Accepts a video and prompt, creates a new task, and starts the processing pipeline in the background. It immediately returns a `task_id`.
-    -   `/status/{task_id}`: Allows the frontend to poll for the status of a processing task.
-*   `analysis_pipeline.py`: This module, now named `run_full_pipeline`, orchestrates the entire end-to-end job. It's called as a background task and is responsible for every step from GCS upload to final render. It updates a central `tasks` table in Supabase to track its progress.
-*   `services/`: This directory contains a client module for each external service (GCS, Supabase, Zilliz, Gemini, Video Intelligence, Creatomate). These modules contain the logic for making real API calls and have built-in mock fallbacks if credentials are not provided.
+*   `main.py`: The main entry point for the FastAPI application. It serves the frontend and provides three key endpoints:
+    -   `/upload`: Accepts a video file for ingestion and analysis.
+    -   `/create`: Accepts a text prompt to generate a new video from the library.
+    -   `/status/{task_id}`: Allows the frontend to poll for the status of either analysis or creation tasks.
+*   `pipelines.py`: This module orchestrates the two main workflows of the application:
+    -   `run_analysis_pipeline`: Handles the ingestion of a new video (upload, analysis, metadata/embedding storage).
+    -   `run_creation_pipeline`: Handles the generation of a new video (semantic search, AI planning, rendering).
+*   `services/`: This directory contains a client module for each external service (GCS, Supabase, Zilliz, Gemini, Video Intelligence, Creatomate).
 *   `config.py`: A centralized, Pydantic-based configuration module for managing all settings and secrets.
 
 ### Google Cloud Function (`gcp_function/`)

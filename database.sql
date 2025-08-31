@@ -11,8 +11,7 @@ CREATE TABLE videos (
     metadata JSONB,
     -- Assuming an embedding model that produces vectors of 768 dimensions (e.g., some Gemini models).
     -- This should be adjusted based on the actual embedding model used.
-    summary_embedding VECTOR(768),
-    segments JSONB[]
+    summary_embedding VECTOR(768)
 );
 
 -- Add indexes for performance
@@ -20,7 +19,22 @@ CREATE INDEX idx_videos_user_id ON videos(user_id);
 
 -- Optional: Add comments to the columns for clarity
 COMMENT ON COLUMN videos.summary_embedding IS 'Vector embedding for the entire video summary. Assumes 768 dimensions.';
-COMMENT ON COLUMN videos.segments IS 'Array of JSON objects, each representing a searchable segment with its own metadata and embedding.';
+
+-- Create a table to store individual video segments (shots) for efficient querying
+CREATE TABLE video_segments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    zilliz_id BIGINT NULL, -- The ID from the Zilliz vector database
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    labels TEXT[],
+    transcript_excerpt TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add indexes for faster lookups
+CREATE INDEX idx_segments_video_id ON video_segments(video_id);
+CREATE INDEX idx_segments_zilliz_id ON video_segments(zilliz_id);
 
 -- Create a table to track the status of asynchronous jobs
 CREATE TABLE tasks (

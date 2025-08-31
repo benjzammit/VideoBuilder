@@ -37,15 +37,17 @@ def create_zilliz_collection():
     print(f"Collection '{COLLECTION_NAME}' not found. Creating now...")
 
     # 1. Define schema fields
-    # Primary key for the segments
-    segment_id = FieldSchema(name="segment_id", dtype=DataType.INT64, is_primary=True, auto_id=True)
-    # ID of the parent video from the main database (Supabase)
+    # Zilliz's auto-generated primary key
+    zilliz_id = FieldSchema(name="zilliz_id", dtype=DataType.INT64, is_primary=True, auto_id=True)
+    # The UUID of the segment from our primary Supabase `video_segments` table
+    supabase_segment_id = FieldSchema(name="supabase_segment_id", dtype=DataType.VARCHAR, max_length=36, description="FK to video_segments table")
+    # The UUID of the parent video, useful for filtering
     video_id = FieldSchema(name="video_id", dtype=DataType.VARCHAR, max_length=36, description="Parent Video UUID")
     # The vector embedding for the video segment
     shot_embedding = FieldSchema(name="shot_embedding", dtype=DataType.FLOAT_VECTOR, dim=EMBEDDING_DIMENSION)
 
     schema = CollectionSchema(
-        fields=[segment_id, video_id, shot_embedding],
+        fields=[zilliz_id, supabase_segment_id, video_id, shot_embedding],
         description="Collection to store vector embeddings of video segments for similarity search"
     )
 

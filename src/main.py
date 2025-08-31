@@ -5,7 +5,7 @@ import uuid
 
 # Import services and the new pipeline orchestrator
 from src.services import supabase_client
-from src.analysis_pipeline import run_full_pipeline
+from src.pipelines import run_analysis_pipeline, run_creation_pipeline
 
 app = FastAPI()
 
@@ -20,42 +20,62 @@ async def read_index():
 
 
 @app.post("/upload", status_code=202)
-async def upload_and_process_video(
+async def upload_video(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    prompt: str = Form("")
+    file: UploadFile = File(...)
 ):
     """
-    Accepts a video upload, creates a task, and starts the full
-    end-to-end pipeline in the background.
+    Accepts a video upload for ingestion, creates a task for analysis,
+    and starts the analysis pipeline in the background.
     """
     if not file.content_type == "video/mp4":
         raise HTTPException(status_code=400, detail="Only .mp4 files are allowed.")
 
-    # 1. Create a new task in the database
     task_id = supabase_client.create_task()
     if not task_id:
         raise HTTPException(status_code=500, detail="Failed to create a new processing task.")
 
-    # 2. Add the full pipeline to run in the background
     background_tasks.add_task(
-        run_full_pipeline,
+        run_analysis_pipeline,
         task_id=task_id,
         file=file.file,
-        original_filename=file.filename,
-        user_prompt=prompt
+        original_filename=file.filename
     )
 
-    print(f"Started task {task_id} for video {file.filename}.")
+    print(f"Started analysis task {task_id} for video {file.filename}.")
+    return {"task_id": task_id, "message": "Video upload successful. Analysis has started."}
 
-    # 3. Return the task ID to the client for polling
+
+class CreateRequest(BaseModel):
+    prompt: str
+
+@app.post("/create", status_code=202)
+async def create_video(
+    request: CreateRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Accepts a prompt, creates a task for video creation, and starts
+    the creation pipeline in the background.
+    """
+    task_id = supabase_client.create_task()
+    if not task_id:
+        raise HTTPException(status_code=500, detail="Failed to create a new creation task.")
+
+    background_tasks.add_task(
+        run_creation_pipeline,
+        task_id=task_id,
+        prompt=request.prompt
+    )
+
+    print(f"Started creation task {task_id} for prompt: '{request.prompt}'.")
     return {"task_id": task_id}
 
 
 @app.get("/status/{task_id}")
 async def get_task_status(task_id: uuid.UUID):
     """
-    Endpoint for the client to poll for the status of a task.
+    Endpoint for the client to poll for the status of any task.
     """
     status = supabase_client.get_task_status(str(task_id))
     if not status:

@@ -1,6 +1,9 @@
 from pymilvus import Collection, connections
 from src.config import settings
 from src.setup_vector_db import COLLECTION_NAME
+from typing import List, Dict, Any
+import random
+import uuid
 
 # Initialize the connection. This will only succeed if the credentials are set.
 is_connected = False
@@ -13,94 +16,72 @@ if settings.ZILLIZ_CLOUD_URI and settings.ZILLIZ_CLOUD_TOKEN:
 else:
     print("⚠️ WARNING: ZILLIZ_CLOUD_URI or ZILLIZ_CLOUD_TOKEN not set. Zilliz client will run in mocked mode.")
 
-def save_segment_embeddings(video_id: str, segments: list[dict]) -> dict:
+def save_segment_embeddings(segments: List[Dict[str, Any]]) -> List[int]:
     """
     Saves video segment embeddings to the Zilliz Cloud collection.
 
     Args:
-        video_id: The UUID of the parent video.
-        segments: A list of segment dictionaries, each containing a 'shot_embedding'.
+        segments: A list of segment dictionaries from our primary DB.
+                  Each dict must contain 'id' (the supabase_segment_id) and 'shot_embedding'.
 
     Returns:
-        A dictionary with the result of the operation.
+        A list of the Zilliz-generated primary keys for the inserted vectors.
     """
     if not is_connected:
-        print("MOCK_DB: Pretending to save segment embeddings to Zilliz.")
-        print(f"  - Parent Video ID: {video_id}")
-        print(f"  - Number of segments: {len(segments)}")
-        return {"status": "success", "inserted_count": len(segments), "mocked": True}
+        print(f"MOCK_DB: Pretending to save {len(segments)} segment embeddings to Zilliz.")
+        return [random.randint(1000, 9999) for _ in segments]
 
     try:
-        print(f"Saving {len(segments)} segment embeddings for video {video_id} to Zilliz...")
         collection = Collection(COLLECTION_NAME)
-
-        # Prepare data for insertion
         data_to_insert = [
             {
-                "video_id": video_id,
+                "supabase_segment_id": str(segment['id']),
+                "video_id": str(segment['video_id']),
                 "shot_embedding": segment['shot_embedding']
             }
             for segment in segments
         ]
-
+        print(f"Saving {len(data_to_insert)} segment embeddings to Zilliz...")
         mutation_result = collection.insert(data_to_insert)
-        collection.flush() # Ensure data is indexed
-
-        inserted_count = len(mutation_result.primary_keys)
-        print(f"✅ Successfully inserted {inserted_count} embeddings into Zilliz.")
-        return {"status": "success", "inserted_count": inserted_count}
-
+        collection.flush()
+        print(f"✅ Successfully inserted {len(mutation_result.primary_keys)} embeddings into Zilliz.")
+        return mutation_result.primary_keys
     except Exception as e:
         print(f"🚫 An unexpected error occurred while saving to Zilliz: {e}")
-        return {"status": "error", "message": str(e)}
+        return []
 
-def search_similar_segments(video_id: str, query_vector: list[float], top_k: int = 5) -> list:
+def search_similar_segments(query_vector: list[float], top_k: int = 10) -> List[str]:
     """
-    Searches for the most similar video segments in Zilliz Cloud.
+    Searches for the most similar video segments across the entire library.
 
     Args:
-        video_id: The UUID of the video to search within.
         query_vector: The vector embedding of the user's prompt.
         top_k: The number of similar segments to return.
 
     Returns:
-        A list of results, each containing the segment ID and similarity score.
+        A list of the supabase_segment_id's for the top matching segments.
     """
     if not is_connected:
-        print(f"MOCK_DB: Pretending to search for {top_k} segments in Zilliz for video {video_id}.")
-        # Return some dummy data that looks like the real output
-        mock_results = [
-            {"id": i, "distance": round(random.random(), 4)} for i in range(top_k)
-        ]
-        return mock_results
+        print(f"MOCK_DB: Pretending to search for {top_k} segments in Zilliz.")
+        return [str(uuid.uuid4()) for _ in range(top_k)]
 
     try:
         collection = Collection(COLLECTION_NAME)
-        collection.load() # Ensure collection is loaded for searching
-
-        search_params = {
-            "metric_type": "L2",
-            "params": {"nprobe": 10},
-        }
-
-        print(f"Searching for top {top_k} similar segments for video {video_id}...")
+        collection.load()
+        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+        print(f"Searching for top {top_k} similar segments...")
 
         results = collection.search(
             data=[query_vector],
             anns_field="shot_embedding",
             param=search_params,
             limit=top_k,
-            expr=f'video_id == "{video_id}"', # Filter by the video ID
-            output_fields=["video_id"] # Optionally retrieve other fields
+            output_fields=["supabase_segment_id"] # Return our primary key
         )
 
-        # Process results
         hits = results[0]
         print(f"✅ Found {len(hits)} similar segments.")
-        return [
-            {"id": hit.id, "distance": hit.distance} for hit in hits
-        ]
-
+        return [hit.entity.get('supabase_segment_id') for hit in hits]
     except Exception as e:
         print(f"🚫 An unexpected error occurred during Zilliz search: {e}")
         return []

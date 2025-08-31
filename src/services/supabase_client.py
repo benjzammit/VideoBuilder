@@ -1,6 +1,7 @@
 from supabase import create_client, Client
 from src.config import settings
 import uuid
+from typing import List, Dict, Any
 
 # Initialize the client. This will only succeed if the URL and key are set.
 if settings.SUPABASE_URL and settings.SUPABASE_KEY:
@@ -14,93 +15,66 @@ else:
     supabase = None
 
 
-def save_video_metadata(
-    video_id: uuid.UUID,
-    file_path: str,
-    duration: float,
-    metadata: dict,
-    summary_embedding: list[float],
-    segments: list[dict]
-    ) -> dict:
-    """
-    Saves the video's metadata to the Supabase 'videos' table.
-
-    Args:
-        video_id: The unique UUID for the video.
-        file_path: The path to the video file in cloud storage (GCS URI).
-        duration: The total duration of the video in seconds.
-        metadata: The raw JSON output from the analysis API.
-        summary_embedding: The vector embedding for the overall video.
-        segments: An array of JSON objects for each segment.
-
-    Returns:
-        A dictionary with the result of the operation.
-    """
+def save_video_metadata(video_id: uuid.UUID, file_path: str, duration: float, metadata: dict, summary_embedding: list[float]) -> dict:
+    """Saves the main video metadata to the Supabase 'videos' table."""
     if supabase is None:
-        print("MOCK_DB: Pretending to save metadata to Supabase.")
-        print(f"  - Video ID: {video_id}")
-        print(f"  - Segments: {len(segments)}")
-        return {"status": "success", "video_id": video_id, "mocked": True}
-
+        print(f"MOCK_DB: Pretending to save video metadata for ID: {video_id}")
+        return {"status": "success", "mocked": True}
     try:
-        print(f"Saving metadata for video {video_id} to Supabase...")
-        data, count = supabase.table('videos').insert({
+        print(f"Saving video metadata for {video_id} to Supabase...")
+        supabase.table('videos').insert({
             "id": str(video_id),
             "file_path": file_path,
             "duration": int(duration),
             "metadata": metadata,
             "summary_embedding": summary_embedding,
-            "segments": segments
         }).execute()
-
-        if count and count.count > 0:
-            print(f"✅ Successfully saved metadata for video {video_id} to Supabase.")
-            return {"status": "success", "data": data}
-        else:
-            print(f"🚫 Error: No data was inserted into Supabase. Response: {data}")
-            return {"status": "error", "message": "Insert failed"}
-
+        print(f"✅ Successfully saved video metadata for {video_id}.")
+        return {"status": "success"}
     except Exception as e:
-        print(f"🚫 An unexpected error occurred while saving to Supabase: {e}")
+        print(f"🚫 An unexpected error occurred while saving video metadata: {e}")
+        return {"status": "error", "message": str(e)}
+
+def save_video_segments(segments_data: List[Dict[str, Any]]) -> dict:
+    """Batch inserts video segments into the 'video_segments' table."""
+    if supabase is None:
+        print(f"MOCK_DB: Pretending to save {len(segments_data)} segments to Supabase.")
+        return {"status": "success", "mocked": True}
+    try:
+        print(f"Batch saving {len(segments_data)} segments to Supabase...")
+        supabase.table('video_segments').insert(segments_data).execute()
+        print(f"✅ Successfully saved {len(segments_data)} segments.")
+        return {"status": "success"}
+    except Exception as e:
+        print(f"🚫 An unexpected error occurred while saving segments: {e}")
         return {"status": "error", "message": str(e)}
 
 def get_video_metadata(video_id: str) -> dict:
-    """
-    Retrieves a video's full metadata record from Supabase.
-
-    Args:
-        video_id: The UUID of the video to retrieve.
-
-    Returns:
-        A dictionary containing the video's metadata, or None if not found.
-    """
+    """Retrieves a video's full metadata record from Supabase."""
     if supabase is None:
         print(f"MOCK_DB: Pretending to fetch metadata for video {video_id}.")
-        # Return some dummy data for mocked environments
-        return {
-            "id": video_id,
-            "segments": [
-                {"shot_id": 0, "start_time": 0, "end_time": 5},
-                {"shot_id": 1, "start_time": 5, "end_time": 10},
-            ],
-            "transcript": "This is a mocked transcript.",
-            "labels": ["mocked", "data"],
-        }
-
+        return {"id": video_id, "transcript": "This is a mocked transcript.", "labels": ["mocked"]}
     try:
         print(f"Fetching metadata for video {video_id} from Supabase...")
-        data, count = supabase.table('videos').select('*').eq('id', video_id).single().execute()
-
-        if data:
-            print(f"✅ Successfully fetched metadata for video {video_id}.")
-            return data
-        else:
-            print(f"🚫 Video with ID {video_id} not found in Supabase.")
-            return None
-
+        response = supabase.table('videos').select('*').eq('id', video_id).single().execute()
+        return response.data
     except Exception as e:
         print(f"🚫 An unexpected error occurred while fetching from Supabase: {e}")
         return None
+
+def get_segments_by_zilliz_ids(zilliz_ids: List[int]) -> List[Dict[str, Any]]:
+    """Retrieves segment details from Supabase using their Zilliz IDs."""
+    if supabase is None:
+        print(f"MOCK_DB: Pretending to fetch {len(zilliz_ids)} segments by Zilliz ID.")
+        return [{"id": str(uuid.uuid4()), "video_id": str(uuid.uuid4()), "start_time": i, "end_time": i+5} for i in range(len(zilliz_ids))]
+    try:
+        print(f"Fetching {len(zilliz_ids)} segments from Supabase by Zilliz ID...")
+        response = supabase.table('video_segments').select('*, videos(file_path)').in_('zilliz_id', zilliz_ids).execute()
+        # The join syntax `videos(file_path)` fetches the file_path from the related videos table.
+        return response.data
+    except Exception as e:
+        print(f"🚫 An unexpected error occurred while fetching segments: {e}")
+        return []
 
 # --- Task Management Functions ---
 
@@ -110,12 +84,9 @@ def create_task() -> str:
         task_id = str(uuid.uuid4())
         print(f"MOCK_DB: Pretending to create task with ID: {task_id}")
         return task_id
-
     try:
-        data, count = supabase.table('tasks').insert({}).select('id').execute()
-        task_id = data[1][0]['id']
-        print(f"✅ Created new task with ID: {task_id}")
-        return task_id
+        response = supabase.table('tasks').insert({}).select('id').execute()
+        return response.data[0]['id']
     except Exception as e:
         print(f"🚫 Error creating task in Supabase: {e}")
         return None
@@ -125,7 +96,6 @@ def update_task(task_id: str, updates: dict):
     if supabase is None:
         print(f"MOCK_DB: Pretending to update task {task_id} with: {updates}")
         return {"status": "success", "mocked": True}
-
     try:
         print(f"Updating task {task_id}: {updates}")
         supabase.table('tasks').update(updates).eq('id', task_id).execute()
@@ -137,13 +107,9 @@ def get_task_status(task_id: str) -> dict:
     if supabase is None:
         print(f"MOCK_DB: Pretending to get status for task {task_id}.")
         return {"status": "rendering", "final_url": None, "mocked": True}
-
     try:
-        data, count = supabase.table('tasks').select('status, final_url, error_message').eq('id', task_id).single().execute()
-        if data:
-            return data[1]
-        else:
-            return None
+        response = supabase.table('tasks').select('status, final_url, error_message').eq('id', task_id).single().execute()
+        return response.data
     except Exception as e:
         print(f"🚫 Error getting task status for {task_id}: {e}")
         return None
