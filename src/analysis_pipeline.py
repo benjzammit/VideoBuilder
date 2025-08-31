@@ -1,121 +1,87 @@
-import asyncio
-import json
-import random
 import uuid
-
-# Import the mocked service clients
-from src.services import supabase_client, zilliz_client
-from src.setup_vector_db import EMBEDDING_DIMENSION
+import asyncio
+from src.services import (
+    gcs,
+    video_intelligence_client,
+    gemini_client,
+    supabase_client,
+    zilliz_client,
+    creatomate_client,
+)
 
 def _time_to_seconds(time_offset: dict) -> float:
     """Converts Google's time offset format to seconds."""
+    if not time_offset: return 0.0
     return time_offset.get("seconds", 0) + time_offset.get("nanos", 0) / 1e9
 
 def parse_video_intelligence_results(raw_results: dict) -> dict:
     """Parses the raw JSON from the Video Intelligence API."""
     print("PIPELINE: Parsing raw analysis results...")
-
-    annotation_results = raw_results.get("annotation_results", [])[0]
-
-    # Extract shots
-    shots = [
-        {
-            "start_time": _time_to_seconds(shot["start_time_offset"]),
-            "end_time": _time_to_seconds(shot["end_time_offset"]),
-        }
-        for shot in annotation_results.get("shot_annotations", [])
-    ]
-
-    # Extract labels
-    labels = list(set(
-        label["entity"]["description"]
-        for label in annotation_results.get("segment_label_annotations", [])
-    ))
-
-    # Extract transcript
-    transcript = " ".join(
-        alt["transcript"]
-        for trans in annotation_results.get("speech_transcriptions", [])
-        for alt in trans.get("alternatives", [])
-    )
-
-    parsed_data = {
-        "shots": shots,
-        "labels": labels,
-        "transcript": transcript,
-        "raw_json": raw_results # Store the original JSON as well
-    }
-    print("PIPELINE: Parsing complete.")
-    return parsed_data
-
-
-async def analyze_video(gcs_uri: str) -> dict:
-    """
-    (Mocked) Simulates calling the Video Intelligence API by reading a local file.
-    """
-    print(f"PIPELINE: Starting video analysis for {gcs_uri}...")
-    await asyncio.sleep(2)  # Simulate API call latency
-
-    try:
-        with open("tests/fixtures/sample_video_intelligence_response.json", "r") as f:
-            raw_results = json.load(f)
-    except FileNotFoundError:
-        print("🚫 Error: Sample response file not found.")
+    if not raw_results or not raw_results.get("annotation_results"):
         return None
+    annotation_results = raw_results["annotation_results"][0]
+    shots = [{"start_time": _time_to_seconds(shot.get("startTimeOffset")), "end_time": _time_to_seconds(shot.get("endTimeOffset"))} for shot in annotation_results.get("shotAnnotations", [])]
+    labels = list(set(label["entity"]["description"] for label in annotation_results.get("segmentLabelAnnotations", [])))
+    transcript = " ".join(alt["transcript"] for trans in annotation_results.get("speechTranscriptions", []) for alt in trans.get("alternatives", [])).strip()
+    return {"shots": shots, "labels": labels, "transcript": transcript, "raw_json": raw_results}
 
-    print("PIPELINE: Mock analysis complete.")
-    return parse_video_intelligence_results(raw_results)
 
-
-async def store_results(video_id: str, parsed_data: dict):
+async def run_full_pipeline(task_id: str, file, original_filename: str, user_prompt: str):
     """
-    (Mocked) Simulates generating embeddings and storing all results.
+    Orchestrates the entire end-to-end workflow from upload to final render.
+    This function is designed to be run as a background task.
     """
-    print("PIPELINE: Storing analysis results...")
+    try:
+        # 1. Upload to GCS
+        supabase_client.update_task(task_id, {"status": "uploading"})
+        gcs_uri = gcs.upload_video_to_gcs(file, original_filename, user_prompt)
+        if not gcs_uri: raise ValueError("Failed to upload to GCS.")
 
-    # 1. (Mocked) Generate dummy embeddings for each shot
-    segments_with_embeddings = []
-    for segment in parsed_data["shots"]:
-        segment_data = segment.copy()
-        # In a real app, you'd call the Gemini API here to get the embedding
-        segment_data["shot_embedding"] = [random.random() for _ in range(EMBEDDING_DIMENSION)]
-        segments_with_embeddings.append(segment_data)
+        # 2. Analyze Video
+        supabase_client.update_task(task_id, {"status": "analyzing"})
+        raw_results = video_intelligence_client.analyze_video_from_gcs(gcs_uri)
+        if not raw_results: raise ValueError("Failed to analyze video.")
+        parsed_data = parse_video_intelligence_results(raw_results)
+        if not parsed_data: raise ValueError("Failed to parse analysis results.")
 
-    # 2. (Mocked) Save segment embeddings to Zilliz
-    await asyncio.sleep(1) # Simulate network call
-    zilliz_client.save_segment_embeddings(video_id=video_id, segments=segments_with_embeddings)
+        # 3. Generate Embeddings & Store Metadata
+        supabase_client.update_task(task_id, {"status": "storing_metadata"})
+        summary_embedding = gemini_client.get_text_embedding(parsed_data["transcript"])
+        segments_for_db = [{"start_time": s["start_time"], "end_time": s["end_time"], "shot_embedding": gemini_client.get_text_embedding(f"Shot from {s['start_time']} to {s['end_time']}"), "labels": parsed_data["labels"]} for s in parsed_data["shots"]]
+        video_id = uuid.uuid4()
+        supabase_client.save_video_metadata(video_id, gcs_uri, parsed_data["shots"][-1]["end_time"], parsed_data["raw_json"], summary_embedding, segments_for_db)
+        zilliz_client.save_segment_embeddings(str(video_id), segments_for_db)
+        supabase_client.update_task(task_id, {"status": "editing", "video_id": str(video_id)})
 
-    # 3. (Mocked) Prepare data and save master record to Supabase
-    supabase_metadata = {
-        "duration": parsed_data["shots"][-1]["end_time"] if parsed_data["shots"] else 0,
-        "segments_with_embeddings": segments_with_embeddings, # Will be stored as JSONB
-        "raw_json": parsed_data["raw_json"],
-        # Add other fields as needed
-    }
-    await asyncio.sleep(1) # Simulate network call
-    supabase_client.save_video_metadata(video_id=video_id, metadata=supabase_metadata)
+        # 4. Generate Production Plan
+        prompt_embedding = gemini_client.get_text_embedding(user_prompt)
+        # In a real app, the zilliz search results would be used here.
+        # For now, we use a simplified approach as noted in the previous step.
+        relevant_shots = segments_for_db[:5]
+        production_plan = gemini_client.generate_production_plan(user_prompt, relevant_shots, parsed_data["transcript"])
+        if not production_plan: raise ValueError("Failed to generate production plan.")
 
-    print("PIPELINE: Results storage complete.")
+        # 5. Start Video Assembly
+        supabase_client.update_task(task_id, {"status": "rendering"})
+        # The source video needs a public URL for Creatomate, not a gs:// URI.
+        public_url = gcs_uri.replace("gs://", "https://storage.googleapis.com/")
+        render_id = creatomate_client.start_video_render(production_plan, public_url)
+        if not render_id: raise ValueError("Failed to start video render.")
+        supabase_client.update_task(task_id, {"render_id": render_id})
 
+        # 6. Poll for Render Completion
+        while True:
+            status_info = creatomate_client.get_render_status(render_id)
+            if status_info["status"] == "succeeded":
+                supabase_client.update_task(task_id, {"status": "complete", "final_url": status_info["url"]})
+                print(f"✅ Task {task_id} completed successfully!")
+                break
+            elif status_info["status"] == "failed":
+                raise ValueError(f"Video rendering failed: {status_info.get('message')}")
 
-async def start_analysis_pipeline(gcs_uri: str, prompt: str, video_filename: str):
-    """
-    Orchestrates the end-to-end video processing workflow (simulated).
-    """
-    print(f"\n---[BACKGROUND TASK]--- Starting Analysis Pipeline for '{video_filename}' ---")
+            print(f"Task {task_id}: Render in progress...")
+            await asyncio.sleep(10) # Poll every 10 seconds
 
-    # 1. Get analysis from Video Intelligence API (mocked)
-    parsed_data = await analyze_video(gcs_uri)
-    if not parsed_data:
-        print("---[BACKGROUND TASK]--- Pipeline failed: Could not analyze video. ---")
-        return
-
-    # 2. Generate a unique ID for the video
-    video_id = str(uuid.uuid4())
-    print(f"PIPELINE: Generated new video ID: {video_id}")
-
-    # 3. Store the results in our databases (mocked)
-    await store_results(video_id, parsed_data)
-
-    # 4. (Future) Generate production plan from prompt and assemble video
-    print(f"---[BACKGROUND TASK]--- Finished Analysis Pipeline for '{video_filename}' (ID: {video_id}) ---\n")
+    except Exception as e:
+        print(f"🚫 Pipeline for task {task_id} failed: {e}")
+        supabase_client.update_task(task_id, {"status": "failed", "error_message": str(e)})

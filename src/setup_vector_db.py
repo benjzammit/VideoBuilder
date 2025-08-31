@@ -1,6 +1,5 @@
-import os
-from dotenv import load_dotenv
 from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
+from src.config import settings
 
 # --- Configuration ---
 COLLECTION_NAME = "video_segments"
@@ -14,14 +13,12 @@ def create_zilliz_collection():
     Connects to Zilliz Cloud and sets up the required 'video_segments' collection.
     This function is idempotent and can be run multiple times safely.
     """
-    load_dotenv()
-
-    uri = os.getenv("ZILLIZ_CLOUD_URI")
-    token = os.getenv("ZILLIZ_CLOUD_TOKEN")
+    uri = settings.ZILLIZ_CLOUD_URI
+    token = settings.ZILLIZ_CLOUD_TOKEN
 
     if not all([uri, token]):
-        print("🚫 Error: Zilliz Cloud credentials not found in .env file.")
-        print("Please set ZILLIZ_CLOUD_URI and ZILLIZ_CLOUD_TOKEN.")
+        print("🚫 Error: Zilliz Cloud credentials not found in your configuration.")
+        print("Please set ZILLIZ_CLOUD_URI and ZILLIZ_CLOUD_TOKEN in your .env file.")
         return
 
     print(f"Connecting to Zilliz Cloud at {uri}...")

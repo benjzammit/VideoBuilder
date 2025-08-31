@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from src.main import app
-import os
+import uuid
 
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
@@ -20,34 +20,54 @@ async def test_read_main(client: AsyncClient):
     # Check for the title text, which is less brittle than a full tag with classes
     assert "Content Intelligence Platform" in response.text
 
-async def test_upload_video_success(client: AsyncClient):
-    """Tests successful video and prompt upload."""
-    dummy_file_name = "test_video.mp4"
-    files = {'file': (dummy_file_name, b"file content", 'video/mp4')}
+async def test_upload_and_process_video(client: AsyncClient, mocker):
+    """
+    Tests that the /upload endpoint creates a task and returns a task_id.
+    """
+    # Mock the service calls made by the endpoint
+    mock_create_task = mocker.patch("src.services.supabase_client.create_task", return_value=str(uuid.uuid4()))
+    # We don't need to mock background_tasks.add_task as it works in tests,
+    # but we do need to mock the pipeline it calls to prevent it from running.
+    mocker.patch("src.analysis_pipeline.run_full_pipeline")
+
+    files = {'file': ("test.mp4", b"content", 'video/mp4')}
     data = {'prompt': 'This is a test prompt.'}
 
-    response = await client.post("/upload/", files=files, data=data)
+    response = await client.post("/upload", files=files, data=data)
+
+    # Assert the endpoint responds correctly
+    assert response.status_code == 202 # Accepted
+    json_response = response.json()
+    assert "task_id" in json_response
+    assert isinstance(json_response["task_id"], str)
+
+    # Assert that our mock for creating a task was called
+    mock_create_task.assert_called_once()
+
+
+async def test_upload_invalid_file_type(client: AsyncClient):
+    """Tests that uploading a non-mp4 file returns a 400 error."""
+    files = {'file': ("test.txt", b"content", 'text/plain')}
+    data = {'prompt': 'A prompt.'}
+
+    response = await client.post("/upload", files=files, data=data)
+
+    assert response.status_code == 400
+    assert "Only .mp4 files are allowed" in response.json()['detail']
+
+async def test_get_task_status(client: AsyncClient, mocker):
+    """
+    Tests the /status/{task_id} endpoint.
+    """
+    task_id = str(uuid.uuid4())
+    mock_status = {"status": "rendering", "final_url": None}
+
+    # Mock the supabase client function that this endpoint calls
+    mocker.patch("src.services.supabase_client.get_task_status", return_value=mock_status)
+
+    response = await client.get(f"/status/{task_id}")
 
     assert response.status_code == 200
     json_response = response.json()
-    assert json_response['filename'] == dummy_file_name
-    assert json_response['prompt'] == 'This is a test prompt.'
-    assert "gcs_uri" in json_response
-    assert json_response["message"].startswith("Video upload successful")
-
-    # The file is no longer saved locally, so we do not check os.path.exists
-
-async def test_upload_invalid_file_type(client: AsyncClient):
-    """Tests that uploading a non-mp4 file returns an error."""
-    dummy_file_name = "test_document.txt"
-    files = {'file': (dummy_file_name, b"some text", 'text/plain')}
-    data = {'prompt': 'Another test prompt.'}
-
-    response = await client.post("/upload/", files=files, data=data)
-
-    assert response.status_code == 400
-    json_response = response.json()
-    assert "Only .mp4 files are allowed." in json_response['message']
-
-    # The file is no longer saved locally, so there is no need to check
-    # if it exists or not. The main check is the 400 status code.
+    assert json_response["status"] == "rendering"
+    assert json_response["final_url"] is None

@@ -1,15 +1,16 @@
-from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+import uuid
 
-# Import services and pipelines
-from src.services.gcs import upload_video_to_gcs
-from src.analysis_pipeline import start_analysis_pipeline
+# Import services and the new pipeline orchestrator
+from src.services import supabase_client
+from src.analysis_pipeline import run_full_pipeline
 
 app = FastAPI()
 
 # Mount static files directory for the frontend
-app.mount("/static", StaticFiles(directory="src/static"), name="static")
+app.mount("/static", FileResponse('src/static/index.html'), name="static")
 
 
 @app.get("/")
@@ -18,46 +19,45 @@ async def read_index():
     return FileResponse('src/static/index.html')
 
 
-@app.post("/upload/")
-async def upload_video(
+@app.post("/upload", status_code=202)
+async def upload_and_process_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     prompt: str = Form("")
 ):
     """
-    Endpoint to upload a video. It uses a (mocked) GCS service and
-    triggers a simulated analysis pipeline as a background task.
+    Accepts a video upload, creates a task, and starts the full
+    end-to-end pipeline in the background.
     """
     if not file.content_type == "video/mp4":
-        return JSONResponse(status_code=400, content={"message": "Only .mp4 files are allowed."})
+        raise HTTPException(status_code=400, detail="Only .mp4 files are allowed.")
 
-    try:
-        # 1. Upload the file to Google Cloud Storage (currently mocked)
-        gcs_uri = upload_video_to_gcs(file.file, file.filename)
+    # 1. Create a new task in the database
+    task_id = supabase_client.create_task()
+    if not task_id:
+        raise HTTPException(status_code=500, detail="Failed to create a new processing task.")
 
-        if not gcs_uri:
-            return JSONResponse(status_code=500, content={"message": "Failed to upload video to cloud storage."})
+    # 2. Add the full pipeline to run in the background
+    background_tasks.add_task(
+        run_full_pipeline,
+        task_id=task_id,
+        file=file.file,
+        original_filename=file.filename,
+        user_prompt=prompt
+    )
 
-        # 2. Trigger the asynchronous analysis pipeline in the background
-        background_tasks.add_task(
-            start_analysis_pipeline,
-            gcs_uri=gcs_uri,
-            prompt=prompt,
-            video_filename=file.filename
-        )
+    print(f"Started task {task_id} for video {file.filename}.")
 
-        print(f"Received prompt for {file.filename}: '{prompt}'")
-        print(f"Analysis pipeline for {file.filename} added to background tasks.")
+    # 3. Return the task ID to the client for polling
+    return {"task_id": task_id}
 
-        # Return an immediate response to the client
-        return {
-            "filename": file.filename,
-            "gcs_uri": gcs_uri,
-            "prompt": prompt,
-            "message": "Video upload successful. Analysis has started in the background."
-        }
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"message": f"An unexpected error occurred: {e}"})
-    finally:
-        # Ensure the file handle is closed
-        file.file.close()
+
+@app.get("/status/{task_id}")
+async def get_task_status(task_id: uuid.UUID):
+    """
+    Endpoint for the client to poll for the status of a task.
+    """
+    status = supabase_client.get_task_status(str(task_id))
+    if not status:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return status

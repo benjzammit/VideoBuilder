@@ -1,6 +1,7 @@
 import json
 import pytest
-from src.analysis_pipeline import parse_video_intelligence_results, start_analysis_pipeline
+import uuid
+from src.analysis_pipeline import parse_video_intelligence_results, run_full_pipeline
 
 @pytest.fixture
 def sample_api_response():
@@ -14,51 +15,63 @@ def test_parse_video_intelligence_results(sample_api_response):
     """
     parsed_data = parse_video_intelligence_results(sample_api_response)
 
-    # Check top-level keys
-    assert "shots" in parsed_data
-    assert "labels" in parsed_data
-    assert "transcript" in parsed_data
-    assert "raw_json" in parsed_data
-
-    # Check content correctness
-    assert len(parsed_data["shots"]) == 3
+    assert "shots" in parsed_data and len(parsed_data["shots"]) == 3
     assert parsed_data["shots"][0]["start_time"] == 0.0
     assert parsed_data["shots"][0]["end_time"] == 4.5
     assert "cat" in parsed_data["labels"]
-    assert "sofa" in parsed_data["labels"]
     assert parsed_data["transcript"].startswith("This is a test transcript")
 
 @pytest.mark.asyncio
-async def test_start_analysis_pipeline_orchestration(mocker):
+async def test_run_full_pipeline_success(mocker, sample_api_response):
     """
-    Tests that the main pipeline function calls its dependencies correctly.
+    Tests the success path of the main pipeline orchestrator.
     """
-    # Mock the dependencies of the pipeline
-    mock_parsed_data = {"shots": [{"start_time": 1, "end_time": 2}], "labels": [], "transcript": "", "raw_json": {}}
-    mock_analyze = mocker.patch("src.analysis_pipeline.analyze_video", return_value=mock_parsed_data)
-    mock_store = mocker.patch("src.analysis_pipeline.store_results")
+    # Mock all external service calls
+    mocker.patch("src.services.gcs.upload_video_to_gcs", return_value="gs://fake-bucket/video.mp4")
+    mocker.patch("src.services.video_intelligence_client.analyze_video_from_gcs", return_value=sample_api_response)
+    mocker.patch("src.services.gemini_client.get_text_embedding", return_value=[0.1] * 768)
+    mocker.patch("src.services.gemini_client.generate_production_plan", return_value={"clips": []})
+    mocker.patch("src.services.supabase_client.save_video_metadata", return_value={"status": "success"})
+    mocker.patch("src.services.zilliz_client.save_segment_embeddings", return_value={"status": "success"})
+    mocker.patch("src.services.creatomate_client.start_video_render", return_value="mock-render-id")
+    # Mock the polling status, make it succeed on the first try
+    mocker.patch("src.services.creatomate_client.get_render_status", return_value={"status": "succeeded", "url": "http://final.video"})
 
-    # Define inputs for the pipeline
-    test_gcs_uri = "gs://fake-bucket/test.mp4"
-    test_prompt = "a test prompt"
-    test_filename = "test.mp4"
+    mock_update_task = mocker.patch("src.services.supabase_client.update_task")
 
     # Run the pipeline
-    await start_analysis_pipeline(test_gcs_uri, test_prompt, test_filename)
+    task_id = str(uuid.uuid4())
+    await run_full_pipeline(task_id, b"file", "video.mp4", "a prompt")
 
-    # Assert that the mocked functions were called correctly
-    mock_analyze.assert_called_once_with(test_gcs_uri)
+    # Assert that the task status was updated at each stage
+    assert mock_update_task.call_count >= 5
+    assert any(call.args[1]['status'] == 'uploading' for call in mock_update_task.call_args_list)
+    assert any(call.args[1]['status'] == 'analyzing' for call in mock_update_task.call_args_list)
+    assert any(call.args[1]['status'] == 'storing_metadata' for call in mock_update_task.call_args_list)
+    assert any(call.args[1]['status'] == 'rendering' for call in mock_update_task.call_args_list)
+    # Final call should be to set status to 'complete'
+    final_call_args = mock_update_task.call_args.args
+    assert final_call_args[0] == task_id
+    assert final_call_args[1]['status'] == 'complete'
+    assert final_call_args[1]['final_url'] == "http://final.video"
 
-    # Assert that store_results was called once
-    mock_store.assert_called_once()
 
-    # Check the positional arguments passed to the mocked store_results
-    # call_args is a tuple of (args, kwargs)
-    pos_args = mock_store.call_args[0]
+@pytest.mark.asyncio
+async def test_run_full_pipeline_failure(mocker):
+    """
+    Tests that the pipeline correctly handles a failure in one of the steps.
+    """
+    # Mock a service to fail
+    mocker.patch("src.services.gcs.upload_video_to_gcs", return_value=None) # Simulate GCS upload failure
+    mock_update_task = mocker.patch("src.services.supabase_client.update_task")
 
-    video_id_arg = pos_args[0]
-    parsed_data_arg = pos_args[1]
+    # Run the pipeline
+    task_id = str(uuid.uuid4())
+    await run_full_pipeline(task_id, b"file", "video.mp4", "a prompt")
 
-    assert isinstance(video_id_arg, str)
-    assert len(video_id_arg) == 36  # Length of a UUID string
-    assert parsed_data_arg == mock_parsed_data
+    # Assert that the final task status is 'failed'
+    final_call_args = mock_update_task.call_args.args
+    assert final_call_args[0] == task_id
+    assert final_call_args[1]['status'] == 'failed'
+    assert "error_message" in final_call_args[1]
+    assert "Failed to upload to GCS" in final_call_args[1]['error_message']

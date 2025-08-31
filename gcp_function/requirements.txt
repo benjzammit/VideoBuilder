@@ -1,0 +1,8 @@
+# This file will contain the dependencies for the Google Cloud Function.
+# For example:
+# google-cloud-videointelligence
+# google-cloud-storage
+# supabase
+# pymilvus
+# google-generativeai
+# pydantic-settings

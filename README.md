@@ -12,15 +12,18 @@ This project is a Minimum Viable Product (MVP) for a Content Intelligence Platfo
 
 ## Project Architecture
 
-The backend code is organized following a service-oriented approach to separate concerns and improve modularity.
+The application is composed of two main parts: a **FastAPI web server** for handling user interactions and a **Google Cloud Function** for background processing.
 
-*   `src/main.py`: This is the main entry point for the FastAPI application. It handles incoming HTTP requests, validates them, and serves the frontend UI. For the `/upload` endpoint, it delegates the core processing to the analysis pipeline as a background task.
+### FastAPI Web Server (`src/`)
+*   `main.py`: The main entry point for the FastAPI application. It serves the frontend and provides two key endpoints:
+    -   `/upload`: Accepts a video and prompt, creates a new task, and starts the processing pipeline in the background. It immediately returns a `task_id`.
+    -   `/status/{task_id}`: Allows the frontend to poll for the status of a processing task.
+*   `analysis_pipeline.py`: This module, now named `run_full_pipeline`, orchestrates the entire end-to-end job. It's called as a background task and is responsible for every step from GCS upload to final render. It updates a central `tasks` table in Supabase to track its progress.
+*   `services/`: This directory contains a client module for each external service (GCS, Supabase, Zilliz, Gemini, Video Intelligence, Creatomate). These modules contain the logic for making real API calls and have built-in mock fallbacks if credentials are not provided.
+*   `config.py`: A centralized, Pydantic-based configuration module for managing all settings and secrets.
 
-*   `src/analysis_pipeline.py`: This module orchestrates the multi-step process of video analysis. It's responsible for the sequence of operations: analyzing the video, parsing the results, and storing them. In the current implementation, this pipeline is **simulated** and uses mocked services.
-
-*   `src/services/`: This directory contains modules responsible for communicating with external services. Each module is a client for a specific service (e.g., Google Cloud Storage, Supabase). In the current implementation, these clients are **mocked** and do not make real API calls, but they are structured to be easily replaced with live implementations.
-
-*   `src/setup_vector_db.py`: A utility script to be run once to set up the required schema (a "collection") in the Zilliz Cloud vector database.
+### Google Cloud Function (`gcp_function/`)
+*   `main.py`: The entry point for the serverless function. In a production environment, this function would be triggered by a new video upload to GCS. It is responsible for calling the `run_full_pipeline` to start the analysis. This provides a more robust, event-driven alternative to the FastAPI background task for production use.
 
 ## Getting Started
 
@@ -87,6 +90,36 @@ uvicorn src.main:app --reload
 ```
 
 The application will be available at `http://127.0.0.1:8000`. You can open this URL in your browser to see the UI.
+
+## Deployment
+
+While the FastAPI server can be run locally for development, a more scalable production setup involves deploying the analysis pipeline as a serverless cloud function.
+
+### Deploying the Google Cloud Function
+
+The `gcp_function/` directory contains the code for this. The function is designed to be triggered by a new file upload to your GCS bucket.
+
+1.  **Prepare the deployment package:**
+    The cloud function needs access to the code in the `src/` directory. You will need to create a deployment package that includes both `gcp_function/` and `src/`. A simple way is to zip the relevant files from the project root:
+    ```bash
+    zip -r deployment.zip gcp_function/ src/ .env
+    ```
+    *Note: Including the `.env` file is a simple way to deploy secrets for this MVP. For higher security, use a secret manager like Google Secret Manager.*
+
+2.  **Deploy using `gcloud` CLI:**
+    Run the following command, replacing the placeholders with your own values:
+    ```bash
+    gcloud functions deploy process-video-trigger \
+      --gen2 \
+      --runtime=python312 \
+      --region=YOUR_GCP_REGION \
+      --source=./deployment.zip \
+      --entry-point=process_video_trigger \
+      --trigger-event-filters="type=google.cloud.storage.object.v1.finalized" \
+      --trigger-event-filters="bucket=YOUR_GCS_BUCKET_NAME"
+    ```
+
+Once deployed, you can disable the background task in `src/main.py` to have all processing handled by the more robust, event-driven Cloud Function.
 
 ## Environment Variables
 
