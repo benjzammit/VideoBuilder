@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+google-cloud-storage
+google-cloud-videointelligence
+supabase
+pymilvus
+google-generativeai
+requests
+httpx
+python-multipart
+pytest
+pytest-asyncio
