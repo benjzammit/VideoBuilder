@@ -10,6 +10,18 @@ This project is a Minimum Viable Product (MVP) for a Content Intelligence Platfo
 *   **Test Suite:** A suite of `pytest` tests to ensure backend reliability.
 *   **Scalable Foundation:** The project is structured to integrate with a suite of cloud services for analysis, storage, and video rendering.
 
+## Project Architecture
+
+The backend code is organized following a service-oriented approach to separate concerns and improve modularity.
+
+*   `src/main.py`: This is the main entry point for the FastAPI application. It handles incoming HTTP requests, validates them, and serves the frontend UI. For the `/upload` endpoint, it delegates the core processing to the analysis pipeline as a background task.
+
+*   `src/analysis_pipeline.py`: This module orchestrates the multi-step process of video analysis. It's responsible for the sequence of operations: analyzing the video, parsing the results, and storing them. In the current implementation, this pipeline is **simulated** and uses mocked services.
+
+*   `src/services/`: This directory contains modules responsible for communicating with external services. Each module is a client for a specific service (e.g., Google Cloud Storage, Supabase). In the current implementation, these clients are **mocked** and do not make real API calls, but they are structured to be easily replaced with live implementations.
+
+*   `src/setup_vector_db.py`: A utility script to be run once to set up the required schema (a "collection") in the Zilliz Cloud vector database.
+
 ## Getting Started
 
 These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
@@ -49,6 +61,22 @@ These instructions will get you a copy of the project up and running on your loc
         cp .env.example .env
         ```
     *   Open the `.env` file and add your credentials. See the "Environment Variables" section below for details on how to get these keys for the next development phase.
+
+### Database Setup
+
+This project requires two databases: a primary database (Supabase) and a vector database (Zilliz Cloud).
+
+1.  **Set up Supabase:**
+    *   Navigate to your Supabase project's "SQL Editor".
+    *   Open the `database.sql` file from this repository, copy its content, and run it in the editor. This will create the `videos` table and enable the `vector` extension.
+
+2.  **Set up Zilliz Cloud:**
+    *   Ensure your `.env` file is correctly filled with your Zilliz Cloud credentials (`ZILLIZ_CLOUD_URI` and `ZILLIZ_CLOUD_TOKEN`).
+    *   Run the setup script from your terminal:
+        ```bash
+        python src/setup_vector_db.py
+        ```
+    *   This script will connect to your Zilliz instance and create the necessary `video_segments` collection for storing vector embeddings.
 
 ### Running the Application
 

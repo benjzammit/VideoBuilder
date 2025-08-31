@@ -17,17 +17,12 @@ async def test_read_main(client: AsyncClient):
     """Tests if the root endpoint returns the HTML page."""
     response = await client.get("/")
     assert response.status_code == 200
-    assert "<h1>Content Intelligence Platform</h1>" in response.text
+    # Check for the title text, which is less brittle than a full tag with classes
+    assert "Content Intelligence Platform" in response.text
 
 async def test_upload_video_success(client: AsyncClient):
     """Tests successful video and prompt upload."""
     dummy_file_name = "test_video.mp4"
-    uploaded_file_path = os.path.join("src/uploads", dummy_file_name)
-
-    # Clean up file if it exists from a previous failed run
-    if os.path.exists(uploaded_file_path):
-        os.remove(uploaded_file_path)
-
     files = {'file': (dummy_file_name, b"file content", 'video/mp4')}
     data = {'prompt': 'This is a test prompt.'}
 
@@ -37,12 +32,10 @@ async def test_upload_video_success(client: AsyncClient):
     json_response = response.json()
     assert json_response['filename'] == dummy_file_name
     assert json_response['prompt'] == 'This is a test prompt.'
+    assert "gcs_uri" in json_response
+    assert json_response["message"].startswith("Video upload successful")
 
-    # Verify file was created
-    assert os.path.exists(uploaded_file_path)
-
-    # Clean up the created file
-    os.remove(uploaded_file_path)
+    # The file is no longer saved locally, so we do not check os.path.exists
 
 async def test_upload_invalid_file_type(client: AsyncClient):
     """Tests that uploading a non-mp4 file returns an error."""
@@ -56,6 +49,5 @@ async def test_upload_invalid_file_type(client: AsyncClient):
     json_response = response.json()
     assert "Only .mp4 files are allowed." in json_response['message']
 
-    # Ensure the invalid file was not saved
-    uploaded_file_path = os.path.join("src/uploads", dummy_file_name)
-    assert not os.path.exists(uploaded_file_path)
+    # The file is no longer saved locally, so there is no need to check
+    # if it exists or not. The main check is the 400 status code.

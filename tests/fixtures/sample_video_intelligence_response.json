@@ -1,0 +1,50 @@
+{
+  "annotation_results": [
+    {
+      "shot_annotations": [
+        {
+          "start_time_offset": { "seconds": 0, "nanos": 0 },
+          "end_time_offset": { "seconds": 4, "nanos": 500000000 }
+        },
+        {
+          "start_time_offset": { "seconds": 4, "nanos": 500000000 },
+          "end_time_offset": { "seconds": 9, "nanos": 200000000 }
+        },
+        {
+          "start_time_offset": { "seconds": 9, "nanos": 800000000 },
+          "end_time_offset": { "seconds": 15, "nanos": 0 }
+        }
+      ],
+      "segment_label_annotations": [
+        {
+          "entity": { "description": "cat" },
+          "segments": [{ "segment": { "start_time_offset": { "seconds": 1, "nanos": 0 }, "end_time_offset": { "seconds": 8, "nanos": 0 } } }]
+        },
+        {
+          "entity": { "description": "sofa" },
+          "segments": [{ "segment": { "start_time_offset": { "seconds": 0, "nanos": 0 }, "end_time_offset": { "seconds": 9, "nanos": 0 } } }]
+        },
+        {
+          "entity": { "description": "indoor" },
+          "segments": [{ "segment": { "start_time_offset": { "seconds": 0, "nanos": 0 }, "end_time_offset": { "seconds": 15, "nanos": 0 } } }]
+        }
+      ],
+      "speech_transcriptions": [
+        {
+          "alternatives": [
+            {
+              "transcript": "This is a test transcript for the video about a cat.",
+              "words": [
+                { "start_time": { "seconds": 1, "nanos": 100000000 }, "end_time": { "seconds": 1, "nanos": 500000000 }, "word": "This" },
+                { "start_time": { "seconds": 1, "nanos": 500000000 }, "end_time": { "seconds": 1, "nanos": 600000000 }, "word": "is" },
+                { "start_time": { "seconds": 1, "nanos": 600000000 }, "end_time": { "seconds": 1, "nanos": 700000000 }, "word": "a" },
+                { "start_time": { "seconds": 2, "nanos": 0 }, "end_time": { "seconds": 2, "nanos": 400000000 }, "word": "test" },
+                { "start_time": { "seconds": 2, "nanos": 400000000 }, "end_time": { "seconds": 3, "nanos": 0 }, "word": "transcript" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
